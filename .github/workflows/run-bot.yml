@@ -1,7 +1,7 @@
 name: Run WhatsApp Bot
 
 on:
-  workflow_dispatch: # Allows you to start the bot manually with a button
+  workflow_dispatch:
 
 jobs:
   run-bot:
@@ -17,9 +17,11 @@ jobs:
         node-version: '20'
 
     - name: Install Dependencies
+      working-directory: ./core
       run: npm install
 
     - name: Start Bot
+      working-directory: ./core
       env:
         SESSION_ID: ${{ secrets.SESSION_ID }}
       run: node index.js
