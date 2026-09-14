@@ -3,11 +3,9 @@ import path from 'path';
 import http from 'http';
 import https from 'https';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { createRequire } from 'module';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const require = createRequire(import.meta.url);
 
 const BOT_FILE = path.join(__dirname, 'wolf.js');
 const TEMP_FILE = path.join(__dirname, '.bot_run.js');
@@ -18,6 +16,42 @@ console.log('🐾 WOLFBOT LOCAL CORE LOADER');
 console.log('==============================================');
 console.log(`[WOLF-LOAD] Core directory: ${__dirname}`);
 
+
+// ==========================================================
+// ERROR CAPTURE
+// ==========================================================
+
+process.on('uncaughtException', (error) => {
+    console.error('');
+    console.error('==============================================');
+    console.error('🐾 WOLFBOT UNCAUGHT EXCEPTION');
+    console.error('==============================================');
+    console.error(error?.stack || error);
+    console.error('==============================================');
+});
+
+process.on('unhandledRejection', (reason) => {
+    console.error('');
+    console.error('==============================================');
+    console.error('🐾 WOLFBOT UNHANDLED REJECTION');
+    console.error('==============================================');
+    console.error(reason?.stack || reason);
+    console.error('==============================================');
+});
+
+process.on('beforeExit', (code) => {
+    console.log(`[WOLF-LOAD] ⚠ Node is preparing to exit. Code: ${code}`);
+});
+
+process.on('exit', (code) => {
+    console.log(`[WOLF-LOAD] ⚠ Process exited. Code: ${code}`);
+});
+
+
+// ==========================================================
+// CHECK BOT
+// ==========================================================
+
 if (!fs.existsSync(BOT_FILE)) {
     console.error('[WOLF-LOAD] ✖ wolf.js was not found.');
     console.error(`[WOLF-LOAD] Expected: ${BOT_FILE}`);
@@ -26,79 +60,32 @@ if (!fs.existsSync(BOT_FILE)) {
 
 console.log('[WOLF-LOAD] ✓ Local wolf.js found');
 console.log('[WOLF-LOAD] ✓ Local core detected');
-console.log('[WOLF-LOAD] ▸ Disabling unnecessary remote bot download...');
+console.log('[WOLF-LOAD] ▸ Using existing local bot files');
 
 
 // ==========================================================
-// SAFE LOCAL FILE CHECK
+// PATCH HTTP
 // ==========================================================
 
-function localFileExists(file) {
-    try {
-        return fs.existsSync(file) && fs.statSync(file).isFile();
-    } catch {
-        return false;
-    }
-}
-
-
-// ==========================================================
-// PATCH NODE HTTPS / HTTP DOWNLOADS
-// ==========================================================
-
-function patchRequestModule(module) {
+function patchHttpModule(module) {
     const originalRequest = module.request;
-    const originalGet = module.get;
 
-    module.request = function patchedRequest(...args) {
-        const request = originalRequest.apply(this, args);
+    module.request = function (...args) {
+        const req = originalRequest.apply(this, args);
 
-        try {
-            request.on('response', response => {
-                let body = '';
+        req.on('error', (error) => {
+            console.error(
+                '[WOLF-LOAD] HTTP error:',
+                error?.message || error
+            );
+        });
 
-                response.on('data', chunk => {
-                    body += chunk.toString();
-                });
-
-                response.on('end', () => {
-                    const trimmed = body.trim();
-
-                    if (
-                        response.statusCode === 404 &&
-                        (
-                            trimmed === 'Not Found' ||
-                            trimmed === '404: Not Found'
-                        )
-                    ) {
-                        console.log(
-                            '[WOLF-LOAD] ⚠ Remote download returned 404.'
-                        );
-
-                        console.log(
-                            '[WOLF-LOAD] ✓ Local core remains active.'
-                        );
-                    }
-                });
-            });
-        } catch {
-            // Keep the original request untouched if patching fails.
-        }
-
-        return request;
-    };
-
-    module.get = function patchedGet(...args) {
-        const request = module.request(...args);
-
-        request.end();
-
-        return request;
+        return req;
     };
 }
 
-patchRequestModule(http);
-patchRequestModule(https);
+patchHttpModule(http);
+patchHttpModule(https);
 
 
 // ==========================================================
@@ -108,98 +95,37 @@ patchRequestModule(https);
 if (typeof globalThis.fetch === 'function') {
     const originalFetch = globalThis.fetch;
 
-    globalThis.fetch = async function patchedFetch(...args) {
-        const response = await originalFetch.apply(this, args);
-
+    globalThis.fetch = async function (...args) {
         try {
-            if (
-                response.status === 404 &&
-                typeof response.clone === 'function'
-            ) {
-                const clone = response.clone();
-                const text = (await clone.text()).trim();
+            const response = await originalFetch.apply(this, args);
 
-                if (
-                    text === 'Not Found' ||
-                    text === '404: Not Found'
-                ) {
-                    console.log(
-                        '[WOLF-LOAD] ⚠ fetch() received remote 404.'
-                    );
-                    console.log(
-                        '[WOLF-LOAD] ✓ Ignoring failed remote download.'
-                    );
-                }
+            if (response.status === 404) {
+                console.log(
+                    '[WOLF-LOAD] ⚠ Remote request returned HTTP 404.'
+                );
+                console.log(
+                    '[WOLF-LOAD] ✓ Local WOLFBOT files are still available.'
+                );
             }
-        } catch {
-            // Never interfere with normal fetch behaviour.
-        }
 
-        return response;
+            return response;
+        } catch (error) {
+            console.error(
+                '[WOLF-LOAD] fetch error:',
+                error?.message || error
+            );
+
+            throw error;
+        }
     };
 }
 
 
 // ==========================================================
-// PATCH AXIOS
+// LOAD SOURCE
 // ==========================================================
 
-try {
-    const axios = require('axios');
-
-    if (axios && typeof axios.request === 'function') {
-        const originalAxiosRequest = axios.request.bind(axios);
-
-        axios.request = async function patchedAxiosRequest(config) {
-            try {
-                return await originalAxiosRequest(config);
-            } catch (error) {
-                if (
-                    error?.response?.status === 404 &&
-                    (
-                        error?.response?.data === 'Not Found' ||
-                        error?.response?.data?.message === 'Not Found'
-                    )
-                ) {
-                    console.log(
-                        '[WOLF-LOAD] ⚠ Axios remote download returned 404.'
-                    );
-                    console.log(
-                        '[WOLF-LOAD] ✓ Local core is available.'
-                    );
-                }
-
-                throw error;
-            }
-        };
-
-        axios.get = function (...args) {
-            return axios.request({
-                method: 'GET',
-                url: args[0],
-                ...(args[1] || {})
-            });
-        };
-
-        axios.post = function (...args) {
-            return axios.request({
-                method: 'POST',
-                url: args[0],
-                data: args[1],
-                ...(args[2] || {})
-            });
-        };
-    }
-} catch {
-    console.log('[WOLF-LOAD] • Axios patch skipped.');
-}
-
-
-// ==========================================================
-// PREPARE WOLF.JS
-// ==========================================================
-
-let botSource = fs.readFileSync(BOT_FILE, 'utf8');
+const botSource = fs.readFileSync(BOT_FILE, 'utf8');
 
 console.log(
     `[WOLF-LOAD] ✓ wolf.js loaded (${Buffer.byteLength(botSource)} bytes)`
@@ -207,87 +133,87 @@ console.log(
 
 
 // ==========================================================
-// FIX createRequire COMPATIBILITY
+// CREATE REQUIRE FIX
 // ==========================================================
 
-botSource = botSource.replace(
+let patchedSource = botSource;
+
+patchedSource = patchedSource.replace(
     /createRequire\(\[([^\]]+)\]\)/g,
     'createRequire(import.meta.url)'
 );
 
-botSource = botSource.replace(
+patchedSource = patchedSource.replace(
     /createRequire\(\[([^\]]+)\]/g,
     'createRequire(import.meta.url)'
 );
 
 
 // ==========================================================
-// PREVENT SELF-DOWNLOAD WHEN LOCAL CORE EXISTS
-// ==========================================================
-//
-// These replacements only target obvious download/setup checks.
-// The actual bot source remains otherwise untouched.
-//
-
-const localCoreFiles = fs
-    .readdirSync(__dirname)
-    .filter(file => {
-        const fullPath = path.join(__dirname, file);
-        return localFileExists(fullPath);
-    });
-
-console.log(
-    `[WOLF-LOAD] ✓ Local files detected: ${localCoreFiles.length}`
-);
-
-console.log(
-    `[WOLF-LOAD] ✓ Files: ${localCoreFiles.join(', ')}`
-);
-
-
-// ==========================================================
-// WRITE TEMPORARY EXECUTION FILE
+// WRITE TEMP BOT
 // ==========================================================
 
 try {
     if (fs.existsSync(TEMP_FILE)) {
         fs.unlinkSync(TEMP_FILE);
     }
-} catch {
-    // Ignore cleanup errors.
-}
 
-fs.writeFileSync(TEMP_FILE, botSource, 'utf8');
+    fs.writeFileSync(TEMP_FILE, patchedSource, 'utf8');
 
-console.log('[WOLF-LOAD] ✓ Local bot prepared');
-console.log('[WOLF-LOAD] ▸ Starting WOLFBOT...');
-console.log('==============================================');
-console.log('');
-
-
-// ==========================================================
-// START BOT
-// ==========================================================
-
-try {
-    await import(pathToFileURL(TEMP_FILE).href);
+    console.log('[WOLF-LOAD] ✓ Local bot prepared');
 } catch (error) {
-    console.error('');
-    console.error('==============================================');
-    console.error('🐾 WOLFBOT STARTUP ERROR');
-    console.error('==============================================');
-    console.error(error);
-    console.error('==============================================');
-    console.error('');
+    console.error('[WOLF-LOAD] ✖ Failed preparing bot:');
+    console.error(error?.stack || error);
     process.exit(1);
 }
 
 
 // ==========================================================
-// CLEAN TEMP FILE ON EXIT
+// START
 // ==========================================================
 
-const cleanup = () => {
+console.log('[WOLF-LOAD] ▸ Starting WOLFBOT...');
+console.log('==============================================');
+console.log('');
+
+try {
+    await import(pathToFileURL(TEMP_FILE).href);
+
+    console.log('');
+    console.log('[WOLF-LOAD] ✓ wolf.js import completed');
+
+} catch (error) {
+
+    console.error('');
+    console.error('==============================================');
+    console.error('🐾 WOLFBOT STARTUP ERROR');
+    console.error('==============================================');
+    console.error(error?.stack || error);
+    console.error('==============================================');
+    console.error('');
+
+    process.exitCode = 1;
+}
+
+
+// ==========================================================
+// KEEP PROCESS ALIVE
+// ==========================================================
+//
+// Some bot versions finish the import while their startup
+// process has not yet created a persistent event loop.
+//
+
+setInterval(() => {
+    // Keep the Render process alive while WOLFBOT is running.
+}, 30000);
+
+
+// ==========================================================
+// CLEANUP
+// ==========================================================
+
+function cleanup() {
     try {
         if (fs.existsSync(TEMP_FILE)) {
             fs.unlinkSync(TEMP_FILE);
@@ -295,9 +221,8 @@ const cleanup = () => {
     } catch {
         // Ignore cleanup errors.
     }
-};
+}
 
-process.on('exit', cleanup);
 process.on('SIGINT', () => {
     cleanup();
     process.exit(0);
