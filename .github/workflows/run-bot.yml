@@ -1,0 +1,25 @@
+name: Run WhatsApp Bot
+
+on:
+  workflow_dispatch: # Allows you to start the bot manually with a button
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install Dependencies
+      run: npm install
+
+    - name: Start Bot
+      env:
+        SESSION_ID: ${{ secrets.SESSION_ID }}
+      run: node index.js
